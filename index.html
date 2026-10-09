@@ -1,0 +1,209 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SheetWise — PDF Tools</title>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; font-family: Arial, sans-serif;
+  background: #f4f7fb; color: #172033;
+}
+header {
+  background: white; padding: 20px 7%;
+  border-bottom: 1px solid #e3e8f0;
+  font-size: 24px; font-weight: bold;
+}
+header span { color: #4f46e5; }
+main { max-width: 760px; margin: 45px auto; padding: 20px; }
+h1 { font-size: 36px; margin-bottom: 10px; }
+p { color: #64748b; line-height: 1.6; }
+.panel {
+  background: white; padding: 25px; border-radius: 16px;
+  border: 1px solid #e0e6ef; margin-top: 25px;
+}
+label { display: block; margin: 18px 0 8px; font-weight: bold; }
+input, select, button {
+  width: 100%; padding: 13px; border-radius: 9px;
+  border: 1px solid #cbd5e1; font-size: 16px;
+}
+button {
+  margin-top: 22px; background: #4f46e5;
+  color: white; font-weight: bold; border: 0; cursor: pointer;
+}
+button:disabled { opacity: .5; cursor: wait; }
+#status { white-space: pre-wrap; overflow-wrap: anywhere; }
+footer { text-align: center; padding: 25px; color: #64748b; }
+</style>
+</head>
+<body>
+<header>Sheet<span>Wise</span> 📄</header>
+
+<main>
+  <h1>Print smarter. Save paper.</h1>
+  <p>Put multiple PDF pages on one sheet. Simple, free, and easy to use.</p>
+
+  <section class="panel">
+    <h2>PDF Pages per Sheet</h2>
+    <p>Select a PDF and choose how you want its pages arranged.</p>
+
+    <label for="file">Choose your PDF</label>
+    <input id="file" type="file" accept="application/pdf,.pdf">
+
+    <label for="count">Pages per sheet</label>
+    <select id="count">
+      <option value="2">2 pages</option>
+      <option value="3" selected>3 pages</option>
+      <option value="4">4 pages</option>
+      <option value="6">6 pages</option>
+      <option value="9">9 pages</option>
+    </select>
+
+    <label for="layout">Layout</label>
+    <select id="layout">
+      <option value="vertical" selected>Vertical (one column)</option>
+      <option value="horizontal">Horizontal (one row)</option>
+      <option value="grid">Grid</option>
+    </select>
+
+    <label for="paper">Paper size</label>
+    <select id="paper">
+      <option value="A4" selected>A4</option>
+      <option value="Letter">Letter</option>
+    </select>
+
+    <button id="convert">Create PDF</button>
+    <p id="status" role="status">Your files are processed in your browser.</p>
+  </section>
+</main>
+
+<footer>SheetWise · Free PDF tools for students</footer>
+
+<script>
+const fileInput = document.getElementById("file");
+const button = document.getElementById("convert");
+const status = document.getElementById("status");
+
+button.addEventListener("click", async () => {
+  const file = fileInput.files[0];
+
+  if (!file) {
+    status.textContent = "Please select a PDF file first.";
+    return;
+  }
+
+  if (!file.name.toLowerCase().endsWith(".pdf")) {
+    status.textContent = "Please select a PDF file.";
+    return;
+  }
+
+  if (!window.PDFLib) {
+    status.textContent = "PDF library failed to load. Check your internet connection and refresh.";
+    return;
+  }
+
+  button.disabled = true;
+  status.textContent = "Processing your PDF...";
+
+  try {
+    const { PDFDocument } = PDFLib;
+    const sourceBytes = await file.arrayBuffer();
+    const source = await PDFDocument.load(sourceBytes);
+    const output = await PDFDocument.create();
+
+    const count = Number(document.getElementById("count").value);
+    const layout = document.getElementById("layout").value;
+    const paper = document.getElementById("paper").value;
+
+    // PDF dimensions are measured in points.
+    let width = paper === "A4" ? 595.28 : 612;
+    let height = paper === "A4" ? 841.89 : 792;
+
+    if (layout === "horizontal") {
+      [width, height] = [height, width];
+    }
+
+    const margin = 18;
+    const gap = 8;
+    let cols, rows;
+
+    if (layout === "vertical") {
+      cols = 1;
+      rows = count;
+    } else if (layout === "horizontal") {
+      cols = count;
+      rows = 1;
+    } else {
+      cols = Math.ceil(Math.sqrt(count));
+      rows = Math.ceil(count / cols);
+    }
+
+    const slotW = (width - 2 * margin - (cols - 1) * gap) / cols;
+    const slotH = (height - 2 * margin - (rows - 1) * gap) / rows;
+    const totalPages = source.getPageCount();
+
+    for (let start = 0; start < totalPages; start += count) {
+      const sheet = output.addPage([width, height]);
+
+      const end = Math.min(start + count, totalPages);
+      const indices = Array.from(
+        { length: end - start }, (_, i) => start + i
+      );
+
+      const embeddedPages = await output.embedPages(
+        await source.getPages().slice(start, end).map(async () => null)
+      ).catch(() => null);
+
+      // Embed each original page and fit it inside its slot.
+      for (let i = 0; i < indices.length; i++) {
+        const original = await output.embedPage(
+          await source.copyPages(source, [indices[i]]).then(p => p[0])
+        );
+
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const scale = Math.min(
+          slotW / original.width,
+          slotH / original.height
+        );
+        const drawW = original.width * scale;
+        const drawH = original.height * scale;
+
+        const x = margin + col * (slotW + gap) +
+          (slotW - drawW) / 2;
+        const y = height - margin - (row + 1) * slotH -
+          row * gap + (slotH - drawH) / 2;
+
+        sheet.drawPage(original, {
+          x, y, width: drawW, height: drawH
+        });
+      }
+    }
+
+    const result = await output.save();
+    const blob = new Blob([result], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "sheetwise-pages-per-sheet.pdf";
+    link.click();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status.textContent =
+      `Done! ${totalPages} original pages processed into ` +
+      `${Math.ceil(totalPages / count)} sheets.`;
+  } catch (error) {
+    console.error(error);
+    status.textContent =
+      "Could not process this PDF. Try another PDF or a smaller file.";
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
